@@ -1,0 +1,30 @@
+# Copy to .github/workflows/toad.yml in your profile repository (github.com/<you>/<you>),
+# then add  ![my toad](toad/toad.gif)  to its README.md.
+name: toad
+
+on:
+  schedule:
+    - cron: "17 0 * * *" # nightly, right after the UTC day ends
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  grow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Calotriton/git-toad@main
+        with:
+          skin: meadow
+          output-dir: toad
+
+      - name: Commit the toad
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add toad
+          git diff --cached --quiet || git commit -m "toad: nightly growth"
+          git push
