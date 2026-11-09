@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 
 # (minimum total contributions, HUD name)
 STAGES = [
@@ -29,6 +30,7 @@ class Toad:
     spot_colors: list[int] = field(default_factory=list)
     longest_streak: int = 0
     quiet_days: int = 0
+    day: date = field(default_factory=date.today)  # the day the toad is drawn for
 
     @property
     def stage_name(self) -> str:
@@ -85,7 +87,11 @@ def read(snapshot: dict) -> Toad:
     langs = snapshot.get("languages") or []
     colors = [hex_color(l["color"]) for l in langs[:3] if l.get("color")] or [hex_color(DEFAULT_SPOT)]
 
+    days = snapshot.get("days") or []
+    observed = snapshot.get("observed") or (days[-1][0] if days else None)
+
     return Toad(
+        day=date.fromisoformat(observed) if observed else date.today(),
         login=snapshot.get("login", "octocat"),
         total=total,
         stage=stage,

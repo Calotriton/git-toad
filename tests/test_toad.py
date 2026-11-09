@@ -4,6 +4,7 @@ from datetime import date, timedelta
 from gittoad.art import FRAMES, H, SKINS, W, Scene
 from gittoad.encode import encode_gif, encode_png
 from gittoad.life import STAGES, read
+from gittoad.pond import SPECIES, assemble, season_for
 
 
 def snapshot(counts):
@@ -48,6 +49,45 @@ class RenderTest(unittest.TestCase):
         frames = Scene(read(snapshot([3000]))).frames()
         self.assertTrue(encode_gif(frames, W, H, 1, 10).startswith(b"GIF89a"))
         self.assertTrue(encode_png(frames[0], W, H, 1).startswith(b"\x89PNG"))
+
+
+class PondTest(unittest.TestCase):
+    def test_species_have_twelve_months_and_valid_frames(self):
+        for sp in SPECIES:
+            self.assertEqual(len(sp.months), 12, sp.key)
+            for frame in sp.frames:
+                self.assertEqual(len({len(r) for r in frame}), 1, sp.key)
+                self.assertTrue(set("".join(frame)) - {"."} <= set(sp.colors), sp.key)
+
+    def test_only_species_in_season_appear(self):
+        for month in range(1, 13):
+            for day in range(1, 29, 3):
+                d = date(2026, month, day)
+                for c in assemble(d, "someone", False, 40, 86, 128):
+                    self.assertGreater(c.species.months[month - 1], 0, (c.species.key, month))
+
+    def test_no_odonates_fly_at_night(self):
+        for month in range(1, 13):
+            critters = assemble(date(2026, month, 1), "someone", True, 40, 86, 128)
+            self.assertFalse([c for c in critters if c.species.zone == "air"])
+
+    def test_same_day_same_pond(self):
+        a = assemble(date(2026, 5, 3), "x", False, 40, 86, 128)
+        b = assemble(date(2026, 5, 3), "x", False, 40, 86, 128)
+        self.assertEqual([(c.species.key, c.x0) for c in a], [(c.species.key, c.x0) for c in b])
+
+    def test_lilies_only_in_growing_season(self):
+        self.assertFalse(season_for(date(2026, 1, 10)).has("lily_pads"))
+        self.assertTrue(season_for(date(2026, 7, 10)).has("lily_flowers"))
+
+    def test_every_month_fits_a_gif_palette(self):
+        toad = read(snapshot([12000]))
+        for month in range(1, 13):
+            for behavior in ("leap", "sleep"):
+                toad.behavior = behavior
+                toad.day = date(2026, month, 15)
+                frames = Scene(toad, skin="violet").frames()
+                self.assertLessEqual(len({c for f in frames for c in f}), 256)
 
 
 if __name__ == "__main__":

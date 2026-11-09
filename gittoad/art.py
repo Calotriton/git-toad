@@ -7,6 +7,7 @@ import random
 
 from .font import text_pixels, text_width
 from .life import STAGES, Toad
+from .pond import Season, assemble, census, place, season_for
 
 W, H = 128, 96
 SURFACE = 40  # water line
@@ -62,8 +63,8 @@ DAY = {
 NIGHT_INK = 0x0C1238
 
 
-def _night() -> dict:
-    t = {k: (mix(v, NIGHT_INK, 0.55) if isinstance(v, int) else [mix(c, NIGHT_INK, 0.55) for c in v]) for k, v in DAY.items()}
+def _night(day: dict) -> dict:
+    t = {k: (mix(v, NIGHT_INK, 0.55) if isinstance(v, int) else [mix(c, NIGHT_INK, 0.55) for c in v]) for k, v in day.items()}
     t["sky"] = [0x080A24, 0x0E1238, 0x161C4C, 0x1E285E, 0x2A3870]
     t["water"] = [0x1E3C6C, 0x18325E, 0x132850, 0x0F1F42, 0x0A1634]
     t["surface"] = 0x6C88B8
@@ -72,7 +73,17 @@ def _night() -> dict:
     return t
 
 
-NIGHT = _night()
+NIGHT = _night(DAY)
+
+
+def make_theme(season: Season, night: bool) -> dict:
+    t = dict(DAY)
+    t["sky"] = list(season.sky)
+    t["near"], t["near_hi"], t["far"], t["far_hi"] = season.hills
+    tint, f = season.water_tint
+    t["water"] = [mix(c, tint, f) for c in DAY["water"]]
+    t["caustic"] = mix(DAY["caustic"], tint, f)
+    return _night(t) if night else t
 
 SKINS = {
     "meadow": {"H": 0xD0F890, "L": 0x88D850, "G": 0x48A838, "D": 0x286830, "Y": 0xF8F0B8, "y": 0xD8C880},
@@ -355,26 +366,51 @@ def text_sprite(text: str, color: int) -> dict:
     return outlined({p: color for p in text_pixels(text)})
 
 
-def lily_pad(rx: int) -> dict:
+# Young Nymphaea leaves come up reddish in April; they yellow and brown in autumn.
+PAD_AGE = {4: (0x8A4A3A, 0.35), 10: (0xB0A040, 0.25), 11: (0xA07A3A, 0.5)}
+
+
+def lily_pad(rx: int, month: int) -> dict:
     t = DAY
+    tint, f = PAD_AGE.get(month, (0, 0.0))
+    hi, mid, dk = (mix(t[k], tint, f) for k in ("pad_hi", "pad", "pad_dk"))
     body = {}
     for x in range(-rx, rx + 1):
         for y in range(-2, 2):
             if (x / (rx + 0.5)) ** 2 + ((y + 0.5) / 2.2) ** 2 <= 1:
-                body[(x, y)] = t["pad_hi"] if y == -2 else t["pad"] if y < 1 else t["pad_dk"]
+                body[(x, y)] = hi if y == -2 else mid if y < 1 else dk
     for p in [(rx // 3, -2), (rx // 3 + 1, -1)]:
-        body[p] = t["pad_dk"]
+        body[p] = dk
     return outlined(body, 0x1A4020)
 
 
 def flower() -> dict:
-    t = DAY
-    rows = [".P.P.P.", "PpPpPpP", "pPPxPPp", ".ppppp."]
-    cmap = {"P": t["petal"], "p": t["petal_dk"], "x": t["pistil"]}
-    body = {(c - 3, r - 4): cmap[ch] for r, row in enumerate(rows) for c, ch in enumerate(row) if ch != "."}
-    body[(-2, -4)] = t["petal_hi"]
-    body[(0, -4)] = t["petal_hi"]
-    return outlined(body)
+    """White water lily, Nymphaea alba: the native one is white, not pink."""
+    rows = [".W.W.W.", "WwWwWwW", "wWWyWWw", ".wwwww."]
+    cmap = {"W": 0xFFFFFF, "w": 0xC8D4E0, "y": 0xF8D040}
+    return outlined({(c - 3, r - 4): cmap[ch] for r, row in enumerate(rows) for c, ch in enumerate(row) if ch != "."})
+
+
+UNDERWATER_OUTLINE = 0x102038
+_CRITTER_CACHE: dict = {}
+
+
+def critter_sprite(sp, index: int) -> dict:
+    key = (sp.key, index)
+    if key not in _CRITTER_CACHE:
+        rows = sp.frames[index]
+        h, w = len(rows), len(rows[0])
+        oy = {"center": -(h // 2), "bottom": -(h - 1), "top": 0}[sp.anchor]
+        solid, bare = {}, {}
+        for r, row in enumerate(rows):
+            for c, ch in enumerate(row):
+                if ch != ".":
+                    (bare if ch in sp.bare else solid)[(c - w // 2, r + oy)] = sp.colors[ch]
+        if sp.outline:
+            solid = outlined(solid, OUTLINE if sp.zone == "air" else UNDERWATER_OUTLINE)
+        solid.update(bare)
+        _CRITTER_CACHE[key] = solid
+    return _CRITTER_CACHE[key]
 
 
 def cloud(circles: list[tuple[int, int, float]]) -> dict:
@@ -391,30 +427,50 @@ def cloud(circles: list[tuple[int, int, float]]) -> dict:
 
 
 # ---------------------------------------------------------------- the scene
+HORIZON = 40  # where the banks meet the water at full level
+# Far-bank trees: holm oaks (Quercus ilex) stay evergreen; white poplars (Populus alba) turn and drop.
+TREES = [(30, 4, "poplar"), (38, 3, "oak"), (74, 4, "poplar"), (82, 5, "oak"), (122, 4, "poplar")]
+SEASON_INK = {"WINTER": 0xC8E0F8, "SPRING": 0xB8F088, "SUMMER": 0xF8D878, "AUTUMN": 0xF0A050}
+
+
 class Scene:
-    def __init__(self, toad: Toad, skin: str = "meadow", hud: bool = True):
+    def __init__(self, toad: Toad, skin: str = "meadow", hud: bool = True, day=None):
         self.toad = toad
+        self.day = day or toad.day
+        self.season = season_for(self.day)
+        self.month = self.season.month
         self.night = toad.behavior == "sleep"
-        self.theme = NIGHT if self.night else DAY
+        self.theme = make_theme(self.season, self.night)
+        self.sy = HORIZON + self.season.drop  # water line, lower in the dry season
+        self.lilies = self.season.has("lily_pads")
         self.skin = SKINS[skin]
         self.hud = hud
         self.rng = random.Random(toad.login)
-        self.base = self._base()
         r = self.rng
         self.stars = [(r.randrange(W), r.randrange(28), r.random()) for _ in range(28)]
-        self.bubbles = [(r.randrange(8, W - 8), r.random(), r.choice((1, 1, 2))) for _ in range(7)]
-        self.plants = [(x, r.randrange(9, 17), r.random() * TAU) for x in (8, 15, 47, 90, 97, 118)]
+        self.bubbles = [(r.randrange(8, W - 8), r.random(), r.choice((1, 1, 2))) for _ in range(6)]
+        self.chara = [(x, r.randrange(6, 12), r.random() * TAU) for x in (8, 15, 47, 90, 97, 118)]
+        self.pondweed = [(x, r.random() * TAU) for x in (34, 106)]
         self.eggs = self._egg_cluster()
+        self.critters = assemble(self.day, toad.login, self.night, self.sy, BOTTOM, W)
+        self.base = self._base()
+
+    @property
+    def census(self) -> list[dict]:
+        return census(self.critters)
 
     def tone(self, c: int) -> int:
         return mix(c, NIGHT_INK, 0.3) if self.night and c != OUTLINE else c
 
+    def bg(self, c: int) -> int:
+        return mix(c, NIGHT_INK, 0.55) if self.night else c
+
     # -- static backdrop
     def _base(self) -> Canvas:
-        t, cv = self.theme, Canvas()
-        for y in range(SURFACE):
+        t, cv, season, sy = self.theme, Canvas(), self.season, self.sy
+        for y in range(HORIZON):
             for x in range(W):
-                cv.set(x, y, gradient(t["sky"], y / (SURFACE - 1), x, y))
+                cv.set(x, y, gradient(t["sky"], y / (HORIZON - 1), x, y))
         if self.night:
             moon = {}
             for x, y in ellipse(5, 5):
@@ -423,25 +479,36 @@ class Scene:
                 moon[p] = 0xC8BC88
             cv.blit(moon, 94, 19)
         else:
-            cv.blit(cloud([(0, 0, 4), (5, -2, 5), (11, 0, 4)]), 58, 12)
-            cv.blit(cloud([(0, 0, 3), (5, -1, 4), (9, 0, 3)]), 100, 20)
-            cv.blit(cloud([(0, 0, 3), (4, -1, 3)]), 18, 22)
+            grey = 0.25 if season.name == "WINTER" else 0.0
+            shapes = [((58, 12), [(0, 0, 4), (5, -2, 5), (11, 0, 4)]), ((100, 20), [(0, 0, 3), (5, -1, 4), (9, 0, 3)]),
+                      ((18, 22), [(0, 0, 3), (4, -1, 3)]), ((84, 8), [(0, 0, 3), (5, -1, 4), (10, 0, 3), (14, 1, 2)])]
+            for (cx, cy), circles in shapes[: season.clouds]:
+                cv.blit({p: mix(c, 0x8A98B0, grey) for p, c in cloud(circles).items()}, cx, cy)
         for x in range(W):
             fy = int(28 + 2.5 * math.sin(x * 0.06 + 1.3) + 1.5 * math.sin(x * 0.15 + 0.4))
-            for y in range(fy, SURFACE):
+            for y in range(fy, HORIZON):
                 cv.set(x, y, t["far_hi"] if y == fy else t["far"])
-        for tx, r in [(30, 4), (38, 3), (74, 4), (82, 5), (122, 4)]:
-            for x, y in ellipse(r, r):
-                cv.set(tx + x, 33 - r + y, t["tree_hi"] if x + y < -1 else t["tree"])
+        for tx, r, kind in TREES:
+            self._tree(cv, tx, r, kind)
+        near_top = []
         for x in range(W):
             ny = int(35 + 1.5 * math.sin(x * 0.09 + 2.1) + 1.2 * math.sin(x * 0.21 + 1))
-            for y in range(ny, SURFACE):
+            near_top.append(ny)
+            for y in range(ny, HORIZON):
                 cv.set(x, y, t["near_hi"] if y == ny else t["near"])
-        for y in range(SURFACE, H):
+        self._bank_flowers(cv, near_top)
+        for y in range(HORIZON, sy):  # mud exposed by the summer drawdown
             for x in range(W):
-                cv.set(x, y, gradient(t["water"], (y - SURFACE) / (BOTTOM - SURFACE), x, y))
+                crack = (x + (y * 5) // 3) % 9 == 0 or (y - HORIZON) % 3 == 2 and (x * 7) % 11 < 2
+                c = 0x4A3A28 if y == sy - 1 else 0x5E4A36 if crack else 0x86705A
+                cv.set(x, y, self.bg(c))
+        for y in range(sy, H):
+            for x in range(W):
+                cv.set(x, y, gradient(t["water"], (y - sy) / (BOTTOM - sy), x, y))
+        tops = []
         for x in range(W):
             top = BOTTOM + round(1.2 * math.sin(x * 0.2) + 0.8 * math.sin(x * 0.07 + 1))
+            tops.append(top)
             for y in range(top, H):
                 cv.set(x, y, gradient(t["mud"], (y - top) / (H - top), x, y) if y > top else 0)
             cv.set(x, top, mix(t["mud"][0], 0xFFFFFF, 0.15))
@@ -452,25 +519,76 @@ class Scene:
             cv.set(x + 1, y, t["pebble"])
             cv.set(x + 1, y + 1, t["pebble_dk"])
             cv.set(x, y + 1, t["pebble_dk"])
+        if season.has("leaf_litter"):
+            r = random.Random(11)
+            for _ in range(14):
+                x = r.randrange(W - 2)
+                c = self.bg(r.choice((0xC07830, 0x9A5A28, 0xD8A040, 0x7A4A24)))
+                cv.set(x, tops[x], c)
+                cv.set(x + 1, tops[x], c)
+                cv.set(x + 1, tops[x] - 1, c)
         return cv
+
+    def _tree(self, cv: Canvas, tx: int, r: int, kind: str) -> None:
+        ground, bg = 33, self.bg
+        if kind == "oak":
+            for x, y in ellipse(r, r):
+                cv.set(tx + x, ground - r + y, bg(0x58783E if x + y < -1 else 0x3A5A32))
+            return
+        state = self.season.deciduous
+        bark = bg(0x9A8E7C)
+        for y in range(ground - 2 * r - 2, ground + 1):
+            cv.set(tx, y, bark)
+        if state in ("bare", "bud"):
+            for k in range(3):
+                yb = ground - 4 - k * 3
+                for d in range(1, r - k // 2 + 1):
+                    cv.set(tx - d, yb - d, bark)
+                    cv.set(tx + d, yb - d + 1, bark)
+        cy = ground - r - 2
+        for x, y in ellipse(r - 1, r + 1):
+            b = bayer(tx + x, cy + y)
+            if state == "bare":
+                continue
+            if state == "bud":
+                c = 0xA8D878 if b < 0.3 else None
+            elif state == "leaf":
+                c = 0x74BA54 if x + y < -1 else 0x4E9A3E
+            elif state == "turning":
+                c = 0xC8B038 if b < 0.5 else (0x74BA54 if x + y < -1 else 0x5A9A3E)
+            else:  # gold
+                c = None if b < 0.2 else 0xF4D460 if x + y < -1 else 0xE0B030
+            if c is not None:
+                cv.set(tx + x, cy + y, bg(c))
+
+    def _bank_flowers(self, cv: Canvas, near_top: list[int]) -> None:
+        r = random.Random(17)
+        kinds = [(f, c) for f, c in (("daisies", 0xF8D838), ("poppies", 0xE02828), ("squill", 0xB088D8))
+                 if self.season.has(f)]
+        for feature, color in kinds:
+            for _ in range(12):
+                x = r.randrange(2, W - 2)
+                y = r.randrange(near_top[x] + 1, HORIZON)
+                cv.set(x, y, self.bg(color))
+                if feature == "poppies" and r.random() < 0.5:
+                    cv.set(x + 1, y, self.bg(0xB01818))
 
     def _egg_cluster(self) -> list[tuple[int, int, int]]:
         eggs = []
         for row in range(4):
             for col in range(5 - abs(row - 1)):
                 x = 22 + col * 5 + (row % 2) * 2 + abs(row - 1) * 2
-                y = SURFACE + 5 + row * 4
-                eggs.append((x, y, self.rng.randrange(4)))
+                eggs.append((x, 5 + row * 4, self.rng.randrange(4)))
         return eggs
 
     # -- animated layers
     def _water(self, cv: Canvas, f: int, t: float) -> None:
-        th = self.theme
+        th, sy = self.theme, self.sy
         shift = f // 3
         for x in range(W):
-            cv.set(x, SURFACE, th["shimmer"] if (x + shift) % 16 < 3 else th["surface"])
+            cv.set(x, sy, th["shimmer"] if (x + shift) % 16 < 3 else th["surface"])
             if (x - shift) % 24 < 2:
-                cv.set(x, SURFACE + 2, th["surface"])
+                cv.set(x, sy + 2, th["surface"])
         for i, (y, length) in enumerate([(50, 4), (57, 3), (63, 5), (70, 3), (77, 4)]):
             x0 = (i * 37 + round(math.sin(TAU * t + i) * 3)) % W
             for k in range(length):
@@ -482,42 +600,134 @@ class Scene:
                     cv.set(x, y, 0xF8F8D8 if lit else 0x8890C0)
 
     def _plants(self, cv: Canvas, t: float) -> None:
-        th = self.theme
-        for x0, h, ph in self.plants:
+        bg = self.bg
+        # Stoneworts (Chara): whorled, grey-green, carpeting the bottom all year.
+        for x0, h, ph in self.chara:
             for i in range(h):
                 y = BOTTOM - i
-                x = x0 + round(math.sin(TAU * t + ph + i * 0.3) * 1.6 * i / h)
-                cv.set(x, y, th["plant"])
-                if i % 4 == 2:
-                    cv.set(x - 1, y, th["plant_hi"])
-                    cv.set(x - 2, y - 1, th["plant_hi"])
-                elif i % 4 == 0 and i:
-                    cv.set(x + 1, y, th["plant_hi"])
-                    cv.set(x + 2, y - 1, th["plant_hi"])
+                x = x0 + round(math.sin(TAU * t + ph + i * 0.3) * 1.2 * i / h)
+                cv.set(x, y, bg(0x4E7E4A))
+                if i % 3 == 1:
+                    for dx, dy in ((-1, 0), (1, 0), (-2, 1), (2, 1)):
+                        cv.set(x + dx, y + dy, bg(0x7AA868))
+        # Pondweed (Potamogeton) rises toward the light in the warm months.
+        if self.season.has("pondweed"):
+            h = BOTTOM - self.sy - 8
+            for x0, ph in self.pondweed:
+                for i in range(h):
+                    y = BOTTOM - i
+                    x = x0 + round(math.sin(TAU * t + ph + i * 0.15) * 2.0 * i / h)
+                    cv.set(x, y, bg(0x6A7024))
+                    if i % 5 == 3:
+                        side = 1 if (i // 5) % 2 else -1
+                        for dx in (1, 2, 3):
+                            cv.set(x + side * dx, y, bg(0x8A8A30))
+                        cv.set(x + side * 2, y - 1, bg(0xA8A848))
+
+    def _surface_plants(self, cv: Canvas, t: float) -> None:
+        sy, season, bg = self.sy, self.season, self.bg
+        if season.has("crowfoot_leaves"):  # Ranunculus peltatus
+            for x0, x1 in ((6, 20), (86, 104)):
+                for i, x in enumerate(range(x0, x1, 4)):
+                    cv.set(x, sy, bg(0x4E9A40))
+                    cv.set(x + 1, sy, bg(0x5AA048))
+                    cv.set(x + 1, sy - 1, bg(0x7AC058))
+                    if season.has("crowfoot_flowers") and i % 2 == 0:
+                        fx = x + 2
+                        cv.set(fx, sy - 2, bg(0xF8D040))
+                        for dx, dy in N4:
+                            cv.set(fx + dx, sy - 2 + dy, bg(0xFFFFFF))
+        if season.has("duckweed"):  # Lemna minor
+            for x in list(range(0, 24)) + list(range(100, W)):
+                if bayer(x, sy) < 0.6:
+                    cv.set(x, sy, bg(0x6AB838 if x % 3 else 0x4E9A30))
+        if season.has("algae"):
+            for x in range(40, 58):
+                for y in (sy + 1, sy + 2):
+                    if bayer(x, y) < 0.5 - (y - sy) * 0.15:
+                        cv.set(x, y, bg(0x7AA040))
+        if season.has("floating_leaves"):
+            brown = self.month == 12
+            for i, (x0, ph) in enumerate(((12, 0.1), (44, 0.5), (96, 0.3), (116, 0.8))):
+                x = round(x0 + 3 * math.sin(TAU * (t + ph)))
+                c = bg(0xA06030 if brown or i % 2 else 0xE0B030)
+                for dx in (0, 1, 2):
+                    cv.set(x + dx, sy, c)
+                cv.set(x + 1, sy - 1, c)
 
     def _reeds(self, cv: Canvas, t: float) -> None:
-        th = self.theme
-        for x0, top, ph, tail in [(110, 14, 0.0, True), (114, 20, 1.3, True), (119, 11, 2.2, True),
-                                  (123, 24, 0.7, False), (4, 26, 1.9, False), (7, 22, 0.4, True)]:
-            for y in range(top, SURFACE + 8):
-                k = max(0, SURFACE - y) / (SURFACE - top)
+        self._typha(cv, t)
+        self._juncus(cv, t)
+
+    def _typha(self, cv: Canvas, t: float) -> None:
+        """Reedmace through the year: dead straw, new shoots, green, flowering, seed heads."""
+        bg, sy, state = self.bg, self.sy, self.season.typha
+        green, green_hi = 0x4E8A2C, 0x78B040
+        straw, straw_hi = 0xBCA478, 0xD8C498
+        stems = [(110, 14, 0.0, True), (114, 20, 1.3, True), (119, 11, 2.2, True), (123, 24, 0.7, False)]
+
+        def stem(x0, top, ph, col, hi, head):
+            for y in range(top, sy + 8):
+                k = max(0, sy - y) / (sy - top)
                 x = x0 + round(math.sin(TAU * t + ph) * 1.2 * k)
-                under = y > SURFACE
-                cv.set(x, y, mix(th["reed"], th["water"][1], 0.5) if under else th["reed"])
+                under = y > sy
+                cv.set(x, y, bg(mix(col, self.theme["water"][1], 0.5) if under else col))
                 if not under and y % 3 == 0:
-                    cv.set(x - 1, y, th["reed_hi"])
-            if tail:
-                x = x0 + round(math.sin(TAU * t + ph) * 1.2)
-                for y in range(top + 2, top + 8):
-                    cv.set(x, y, th["cattail"])
-                    cv.set(x + 1, y, th["cattail_hi"] if y < top + 4 else th["cattail"])
-                cv.set(x, top + 1, th["reed"])
+                    cv.set(x - 1, y, bg(hi))
+            if not head:
+                return
+            x = x0 + round(math.sin(TAU * t + ph) * 1.2)
+            if head == "flowering":
+                for y in range(top, top + 3):
+                    cv.set(x, y, bg(0xE0C860))  # male spike shedding pollen
+                c1, c2, y0 = 0x6A6A34, 0x8A8A44, top + 3
+            else:
+                c1, c2, y0 = 0x6E3E22, 0x9A6036, top + 2
+            for y in range(y0, y0 + 6):
+                cv.set(x, y, bg(c1))
+                cv.set(x + 1, y, bg(c2 if y < y0 + 2 else c1))
+            if head == "fluff":
+                for i, y in enumerate(range(y0, y0 + 6, 2)):
+                    cv.set(x + (2 if i % 2 else -1), y, bg(0xF0E8D8))
+            cv.set(x, top + 1, bg(col))
+
+        if state in ("dead", "shoots", "young", "straw"):
+            for x0, top, ph, has in stems:
+                if has or state == "straw":
+                    stem(x0, top, ph, straw, straw_hi, "fluff" if has else None)
+            if state in ("shoots", "young"):
+                frac = 0.35 if state == "shoots" else 0.7
+                for x0, top, ph, _ in stems:
+                    stem(x0 + 2, round(sy - (sy - top) * frac), ph + 0.5, green, green_hi, None)
+        else:
+            col, hi = (0xA8A040, 0xC8C060) if state == "yellowing" else (green, green_hi)
+            head = None if state == "green" else "flowering" if state == "flowering" else "seed"
+            for x0, top, ph, has in stems:
+                stem(x0, top, ph, col, hi, head if has else None)
+
+    def _juncus(self, cv: Canvas, t: float) -> None:
+        """A clump of rushes (Juncus) on the left bank; evergreen, tips browning in summer."""
+        bg, sy = self.bg, self.sy
+        tip = 0xA89050 if self.month in (7, 8, 9) else 0x5A9A48
+        base = sy + 4
+        for i, (bx, top, lean) in enumerate([(3, 22, -2), (5, 18, -1), (6, 25, 0), (8, 20, 1), (10, 24, 2), (12, 28, 3)]):
+            for y in range(top, base):
+                k = (base - y) / (base - top)
+                x = bx + round(lean * k + math.sin(TAU * t + i) * 0.8 * k)
+                c = tip if y < top + 2 else 0x3E7A3A
+                cv.set(x, y, bg(mix(c, self.theme["water"][1], 0.5) if y > sy else c))
+            if self.season.has("rush_flowers") and i % 2 == 0:
+                y = top + (base - top) // 4
+                k = (base - y) / (base - top)
+                x = bx + round(lean * k + math.sin(TAU * t + i) * 0.8 * k)
+                cv.set(x + 1, y, bg(0x7A5A30))
+                cv.set(x + 1, y + 1, bg(0x9A7A40))
 
     def _bubbles(self, cv: Canvas, t: float) -> None:
-        th = self.theme
+        th, sy = self.theme, self.sy
         for x0, ph, speed in self.bubbles:
             u = (t * speed + ph) % 1
-            y = BOTTOM - 2 - round(u * (BOTTOM - SURFACE - 4))
+            y = BOTTOM - 2 - round(u * (BOTTOM - sy - 4))
             x = x0 + round(math.sin(u * TAU * 2) * 1.5)
             if speed == 2:
                 cv.set(x, y, th["bubble"])
@@ -526,11 +736,43 @@ class Scene:
                     cv.set(x + dx, y + dy, th["bubble_dk"])
                 cv.set(x - 1, y - 1, th["bubble"])
 
+    def _critters(self, cv: Canvas, f: int, t: float, zones: tuple) -> None:
+        for c in self.critters:
+            sp = c.species
+            if sp.zone not in zones:
+                continue
+            x, y, right = place(c, t, self.sy, BOTTOM)
+            sprite = critter_sprite(sp, (f // sp.frame_every) % len(sp.frames))
+            cv.blit(sprite, round(x), round(y), flip=not right, tone=self.tone)
+
+    @property
+    def perch_y(self) -> int:
+        """Where the frog sits: a lily pad in the growing season, a mossy rock otherwise."""
+        return self.sy - 1 if self.lilies else self.sy - 4
+
     def _pads(self, cv: Canvas, dip: int = 0) -> None:
-        tone = self.tone
-        cv.blit(lily_pad(8), 26, SURFACE, tone=tone)
-        cv.blit(flower(), 25, SURFACE - 1, tone=tone)
-        cv.blit(lily_pad(17), 64, SURFACE + dip, tone=tone)
+        tone, sy = self.tone, self.sy
+        if self.lilies:
+            cv.blit(lily_pad(8, self.month), 26, sy, tone=tone)
+            if self.season.has("lily_flowers"):
+                cv.blit(flower(), 25, sy - 1, tone=tone)
+            cv.blit(lily_pad(17, self.month), 64, sy + dip, tone=tone)
+            return
+        r = random.Random(5)
+        body = {}
+        for x, y in ellipse(22, 7):
+            py = y + 2
+            c = 0xB4B0A0 if py <= -3 else 0x8A8678 if py <= 0 else 0x625E54
+            if py <= -2 and r.random() < 0.35:
+                c = r.choice((0x5A8A3A, 0x7AAA48))
+            body[(x, py)] = c
+        above = {p: c for p, c in body.items() if p[1] <= 0}
+        for p, c in outlined(above).items():
+            if p[1] <= 0:
+                cv.set(64 + p[0], sy + p[1], tone(c))
+        for (x, y), c in body.items():
+            if y > 0:
+                cv.set(64 + x, sy + y, tone(mix(c, self.theme["water"][0], 0.55)))
 
     def _hud(self, cv: Canvas) -> None:
         toad = self.toad
@@ -548,24 +790,26 @@ class Scene:
         x = W - 3 - text_width(count)
         cv.blit(text_sprite(count, WHITE), x, 3)
         cv.blit(outlined(fly(1)), x - 6, 5)
+        season = self.season.name
+        cv.blit(text_sprite(season, SEASON_INK[season]), W - 3 - text_width(season), 10)
 
     # -- the creature
     def _spawn(self, cv: Canvas, f: int, t: float) -> None:
         excited = self.toad.behavior == "leap"
-        for i, (x, y, emb) in enumerate(self.eggs):
+        for i, (x, dy0, emb) in enumerate(self.eggs):
             dy = round(math.sin(TAU * t * 2 + i * 0.9) * 0.7)
             wiggle = emb + (f // (2 if excited else 6)) + i
-            cv.blit(egg(wiggle if (excited or i % 3 == 0) else emb), x, y + dy, tone=self.tone)
+            cv.blit(egg(wiggle if (excited or i % 3 == 0) else emb), x, self.sy + dy0 + dy, tone=self.tone)
         if excited:
-            self._sparkles(cv, f, 34, SURFACE + 11, 14)
+            self._sparkles(cv, f, 34, self.sy + 11, 14)
 
     def _swim(self, cv: Canvas, f: int, t: float) -> None:
-        toad, b = self.toad, self.toad.behavior
+        toad, b, sy = self.toad, self.toad.behavior, self.sy
 
         def path(u: float, laps: int, rx: float) -> tuple[float, float, bool]:
             a = TAU * u * laps
             x = 64 + rx * math.cos(a)
-            y = 63 + 9 * math.sin(a) + 2 * math.sin(2 * a)
+            y = 65 + 8 * math.sin(a) + 2 * math.sin(2 * a)
             return x, y, math.sin(a) < 0  # facing right on the upper path
 
         mouth = False
@@ -589,7 +833,7 @@ class Scene:
                 mx = cx + (8 if cr else -8)
                 if 0.1 <= t < tc:
                     u = (t - 0.1) / (tc - 0.1)
-                    fx, fy = mx + math.sin(u * TAU * 2) * 2, SURFACE + 2 + (cy - SURFACE - 2) * u
+                    fx, fy = mx + math.sin(u * TAU * 2) * 2, sy + 2 + (cy - sy - 2) * u
                     flake = {(0, 0): 0x9AD848, (1, 0): 0x5AA830, (0, 1): 0x5AA830}
                     cv.blit(outlined(flake, 0x2A5A20), round(fx), round(fy))
                 mouth = tc - 0.06 <= t <= tc + 0.04
@@ -600,7 +844,7 @@ class Scene:
 
     def _frog(self, cv: Canvas, f: int, t: float) -> None:
         toad, b, skin = self.toad, self.toad.behavior, self.skin
-        fx, fy = 64, SURFACE - 1
+        fx, fy = 64, self.perch_y
         template, closed, look, sac, dip, oy = SIT, False, 0, 0.0, 0, 0
         tongue = None
         fly_pos = None
@@ -641,7 +885,7 @@ class Scene:
                 u = (t - 0.08) / 0.4
                 oy = -round(10 * 4 * u * (1 - u))
                 template = JUMP
-            elif t < 0.56:
+            elif t < 0.56 and self.lilies:
                 dip = 1
             if 0.48 <= t < 0.8:
                 self._splash(cv, (t - 0.48) / 0.32, fx)
@@ -689,16 +933,16 @@ class Scene:
             cv.blit(fly(f % 2), tx, ty - 1)
 
     def _splash(self, cv: Canvas, u: float, x: int) -> None:
-        th = self.theme
+        th, sy = self.theme, self.sy
         for side in (-1, 1):
             for k in range(3):
                 dx = side * (6 + k * 4) * (0.4 + u)
                 dy = -(10 - k * 3) * 4 * u * (1 - u)
-                cv.set(round(x + side * 14 + dx), round(SURFACE - 2 + dy), th["shimmer"])
+                cv.set(round(x + side * 14 + dx), round(sy - 2 + dy), th["shimmer"])
         r = 18 + u * 16
         for dx in range(-round(r), round(r) + 1):
             if abs(dx) > r - 3:
-                cv.set(x + dx, SURFACE, 0xFFFFFF)
+                cv.set(x + dx, sy, 0xFFFFFF)
 
     def _sparkles(self, cv: Canvas, f: int, cx: int, cy: int, spread: int) -> None:
         r = random.Random(3)
@@ -720,7 +964,10 @@ class Scene:
         cv = self.base.copy()
         self._water(cv, f, t)
         self._plants(cv, t)
+        self._critters(cv, f, t, ("bottom", "water", "film"))
         self._bubbles(cv, t)
+        self._surface_plants(cv, t)
+        self._critters(cv, f, t, ("air",))  # behind the frog and the reeds
         stage = self.toad.stage
         if stage < 4:
             self._pads(cv)
@@ -730,6 +977,7 @@ class Scene:
                 self._swim(cv, f, t)
         else:
             self._frog(cv, f, t)
+        self._critters(cv, f, t, ("surface",))
         self._reeds(cv, t)
         if self.hud:
             self._hud(cv)

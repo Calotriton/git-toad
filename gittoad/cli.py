@@ -24,12 +24,15 @@ def _write(path: str, data: bytes) -> None:
     os.replace(tmp, path)
 
 
-def render_toad(toad: Toad, out_dir: str, skin: str, scale: int, hud: bool, name: str = "toad") -> None:
+def render_toad(toad: Toad, out_dir: str, skin: str, scale: int, hud: bool, name: str = "toad") -> Scene:
     scene = Scene(toad, skin=skin, hud=hud)
     frames = scene.frames()
     os.makedirs(out_dir, exist_ok=True)
     _write(os.path.join(out_dir, f"{name}.gif"), encode_gif(frames, W, H, scale, DELAY_CS))
     _write(os.path.join(out_dir, f"{name}.png"), encode_png(frames[STILL_FRAME], W, H, scale))
+    pond = {"date": scene.day.isoformat(), "season": scene.season.name.lower(), "species": scene.census}
+    _write(os.path.join(out_dir, "pond.json"), json.dumps(pond, indent=1, ensure_ascii=False).encode())
+    return scene
 
 
 def cmd_collect(args) -> int:
@@ -50,9 +53,13 @@ def cmd_render(args) -> int:
         toad.stage = args.stage
     if args.behavior:
         toad.behavior = args.behavior
-    render_toad(toad, args.output_dir, args.skin, args.scale, not args.no_hud)
+    if args.date:
+        toad.day = date.fromisoformat(args.date)
+    scene = render_toad(toad, args.output_dir, args.skin, args.scale, not args.no_hud)
     print(f"{toad.login}: LV{toad.stage} {toad.stage_name}, {toad.total} contributions, "
-          f"behavior={toad.behavior}, spots={toad.spots} -> {args.output_dir}")
+          f"behavior={toad.behavior}, spots={toad.spots}, {scene.season.name.lower()} {toad.day} -> {args.output_dir}")
+    for s in scene.census:
+        print(f"  {s['count']} x {s['name']} ({s['latin']})")
     return 0
 
 
@@ -73,24 +80,39 @@ def demo_snapshot(total: int) -> dict:
 
 
 def cmd_demo(args) -> int:
-    """Render one GIF per stage and behavior, plus a still contact sheet."""
+    """Render every stage x behavior (or every month), plus a still contact sheet."""
     os.makedirs(args.output_dir, exist_ok=True)
     sheet_rows = []
-    for stage, (threshold, _) in enumerate(STAGES):
-        toad = read(demo_snapshot(max(threshold, 5) + 40))
-        toad.stage = stage
+    if args.seasons:
+        toad = read(demo_snapshot(STAGES[args.stage][0] + 40))
         toad.spots = 3
-        row = []
-        for behavior in BEHAVIORS:
-            toad.behavior = behavior
-            scene = Scene(toad, skin=args.skin, hud=True)
-            frames = scene.frames()
-            if args.gifs:
-                _write(os.path.join(args.output_dir, f"stage{stage}_{behavior}.gif"),
-                       encode_gif(frames, W, H, args.scale, DELAY_CS))
-            row.append(frames[args.frame % FRAMES])
-        sheet_rows.append(row)
-    cols = len(BEHAVIORS)
+        toad.behavior = "idle"
+        cols = 4
+        for r in range(3):
+            row = []
+            for c in range(cols):
+                toad.day = date(2026, r * cols + c + 1, 15)
+                frames = Scene(toad, skin=args.skin).frames()
+                if args.gifs:
+                    _write(os.path.join(args.output_dir, f"month{toad.day.month:02d}.gif"),
+                           encode_gif(frames, W, H, args.scale, DELAY_CS))
+                row.append(frames[args.frame % FRAMES])
+            sheet_rows.append(row)
+    else:
+        for stage, (threshold, _) in enumerate(STAGES):
+            toad = read(demo_snapshot(max(threshold, 5) + 40))
+            toad.stage = stage
+            toad.spots = 3
+            row = []
+            for behavior in BEHAVIORS:
+                toad.behavior = behavior
+                frames = Scene(toad, skin=args.skin, hud=True).frames()
+                if args.gifs:
+                    _write(os.path.join(args.output_dir, f"stage{stage}_{behavior}.gif"),
+                           encode_gif(frames, W, H, args.scale, DELAY_CS))
+                row.append(frames[args.frame % FRAMES])
+            sheet_rows.append(row)
+    cols = len(sheet_rows[0])
     gap = 2
     sw, sh = cols * (W + gap), len(sheet_rows) * (H + gap)
     sheet = [0x101010] * (sw * sh)
@@ -122,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--no-hud", action="store_true")
     r.add_argument("--stage", type=int, choices=range(len(STAGES)), help="override the life stage")
     r.add_argument("--behavior", choices=BEHAVIORS, help="override the behavior")
+    r.add_argument("--date", help="draw the pond as on this day (YYYY-MM-DD), for previews")
     r.set_defaults(func=cmd_render)
 
     d = sub.add_parser("demo", help="render every stage and behavior")
@@ -131,6 +154,8 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--frame", type=int, default=STILL_FRAME)
     d.add_argument("--sheet-scale", type=int, default=2)
     d.add_argument("--gifs", action="store_true")
+    d.add_argument("--seasons", action="store_true", help="one frame per month instead of per stage")
+    d.add_argument("--stage", type=int, default=4, choices=range(len(STAGES)), help="stage for --seasons")
     d.set_defaults(func=cmd_demo)
 
     args = p.parse_args(argv)
