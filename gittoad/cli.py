@@ -6,13 +6,14 @@ import argparse
 import json
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from . import __version__
 from .art import DELAY_CS, FRAMES, H, SKINS, W, Scene
 from .collect import CollectError, collect
 from .encode import encode_gif, encode_png
 from .life import BEHAVIORS, STAGES, Toad, read
+from .sky import Sky, sky_at
 
 STILL_FRAME = 12
 
@@ -24,13 +25,15 @@ def _write(path: str, data: bytes) -> None:
     os.replace(tmp, path)
 
 
-def render_toad(toad: Toad, out_dir: str, skin: str, scale: int, hud: bool, name: str = "toad") -> Scene:
-    scene = Scene(toad, skin=skin, hud=hud)
+def render_toad(toad: Toad, out_dir: str, skin: str, scale: int, hud: bool, name: str = "toad",
+                sky: Sky | None = None) -> Scene:
+    scene = Scene(toad, skin=skin, hud=hud, sky=sky)
     frames = scene.frames()
     os.makedirs(out_dir, exist_ok=True)
     _write(os.path.join(out_dir, f"{name}.gif"), encode_gif(frames, W, H, scale, DELAY_CS))
     _write(os.path.join(out_dir, f"{name}.png"), encode_png(frames[STILL_FRAME], W, H, scale))
-    pond = {"date": scene.day.isoformat(), "season": scene.season.name.lower(), "species": scene.census}
+    pond = {"date": scene.day.isoformat(), "season": scene.season.name.lower(),
+            "time": "night" if scene.night else "day", "species": scene.census}
     _write(os.path.join(out_dir, "pond.json"), json.dumps(pond, indent=1, ensure_ascii=False).encode())
     return scene
 
@@ -55,9 +58,21 @@ def cmd_render(args) -> int:
         toad.behavior = args.behavior
     if args.date:
         toad.day = date.fromisoformat(args.date)
-    scene = render_toad(toad, args.output_dir, args.skin, args.scale, not args.no_hud)
+    sky = None
+    if (args.lat is None) != (args.lon is None):
+        raise SystemExit("git-toad: give both --lat and --lon")
+    if args.lat is not None:
+        now = datetime.fromisoformat(args.now.replace("Z", "+00:00")) if args.now else datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        sky = sky_at(now, args.lat, args.lon)
+        if sky.first_light:
+            print(f"light {sky.first_light:%H:%M}-{sky.last_light:%H:%M} UTC; at {now:%Y-%m-%d %H:%M} UTC it is "
+                  f"{'night' if sky.night else 'day'}, moon phase {sky.moon:.2f}")
+    scene = render_toad(toad, args.output_dir, args.skin, args.scale, not args.no_hud, sky=sky)
     print(f"{toad.login}: LV{toad.stage} {toad.stage_name}, {toad.total} contributions, "
-          f"behavior={toad.behavior}, spots={toad.spots}, {scene.season.name.lower()} {toad.day} -> {args.output_dir}")
+          f"behavior={toad.behavior}, spots={toad.spots}, {scene.season.name.lower()} {toad.day}, "
+          f"{'night' if scene.night else 'day'} -> {args.output_dir}")
     for s in scene.census:
         print(f"  {s['count']} x {s['name']} ({s['latin']})")
     return 0
@@ -145,6 +160,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--stage", type=int, choices=range(len(STAGES)), help="override the life stage")
     r.add_argument("--behavior", choices=BEHAVIORS, help="override the behavior")
     r.add_argument("--date", help="draw the pond as on this day (YYYY-MM-DD), for previews")
+    r.add_argument("--lat", type=float, help="latitude: with --lon, night falls at the real time there")
+    r.add_argument("--lon", type=float, help="longitude, east positive")
+    r.add_argument("--now", help="pretend it is this UTC time (ISO 8601), for previews")
     r.set_defaults(func=cmd_render)
 
     d = sub.add_parser("demo", help="render every stage and behavior")

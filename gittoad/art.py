@@ -8,6 +8,7 @@ import random
 from .font import text_pixels, text_width
 from .life import STAGES, Toad
 from .pond import Season, assemble, census, place, season_for
+from .sky import Sky, moon_phase
 
 W, H = 128, 96
 SURFACE = 40  # water line
@@ -346,6 +347,33 @@ def fly(flap: int) -> dict:
     return body
 
 
+def moth(flap: int) -> dict:
+    body = {(0, 0): 0x8A7A68, (1, 0): 0x6A5A48, (2, 0): 0x6A5A48, (3, -1): 0xC8B8A0, (3, 0): 0x5A4A38}
+    wing, edge = 0xD8CCB4, 0xA89880
+    if flap:
+        body.update({(0, -1): wing, (1, -1): wing, (1, -2): wing, (2, -2): edge, (0, -2): edge})
+    else:
+        body.update({(-1, 0): wing, (-1, 1): wing, (0, 1): wing, (1, 1): edge, (-2, 1): edge})
+    return body
+
+
+def moon_sprite(phase: float) -> dict:
+    """The moon as it really is tonight; the dark side faintly lit by earthshine."""
+    r = 5
+    lit_c, shade_c, crater, dark = 0xF8F0C8, 0xD8CC98, 0xC8BC88, 0x2A3058
+    px = {}
+    c = math.cos(TAU * phase)
+    for x, y in ellipse(r, r):
+        w = math.sqrt(max(0.0, 1 - (y / (r + 0.4)) ** 2))
+        nx = x / (r + 0.4)
+        lit = nx > w * c if phase < 0.5 else nx < -w * c
+        if lit:
+            px[(x, y)] = crater if (x, y) in ((-2, -1), (1, 2), (2, -2)) else lit_c if x + y < 3 else shade_c
+        else:
+            px[(x, y)] = dark
+    return px
+
+
 def sparkle(size: int) -> dict:
     px = {(0, 0): 0xFFFFFF}
     for r in range(1, size + 1):
@@ -434,12 +462,14 @@ SEASON_INK = {"WINTER": 0xC8E0F8, "SPRING": 0xB8F088, "SUMMER": 0xF8D878, "AUTUM
 
 
 class Scene:
-    def __init__(self, toad: Toad, skin: str = "meadow", hud: bool = True, day=None):
+    def __init__(self, toad: Toad, skin: str = "meadow", hud: bool = True, day=None, sky: Sky | None = None):
         self.toad = toad
         self.day = day or toad.day
         self.season = season_for(self.day)
         self.month = self.season.month
-        self.night = toad.behavior == "sleep"
+        # Night falls for real when a location is known, and always when the toad is asleep.
+        self.night = (sky is not None and sky.night) or toad.behavior == "sleep"
+        self.moon = sky.moon if sky is not None else moon_phase(self.day)
         self.theme = make_theme(self.season, self.night)
         self.sy = HORIZON + self.season.drop  # water line, lower in the dry season
         self.lilies = self.season.has("lily_pads")
@@ -472,12 +502,7 @@ class Scene:
             for x in range(W):
                 cv.set(x, y, gradient(t["sky"], y / (HORIZON - 1), x, y))
         if self.night:
-            moon = {}
-            for x, y in ellipse(5, 5):
-                moon[(x, y)] = 0xF8F0C8 if x + y < 3 else 0xD8CC98
-            for p in [(-2, -1), (1, 2), (2, -2)]:
-                moon[p] = 0xC8BC88
-            cv.blit(moon, 94, 19)
+            cv.blit(moon_sprite(self.moon), 94, 19)
         else:
             grey = 0.25 if season.name == "WINTER" else 0.0
             shapes = [((58, 12), [(0, 0, 4), (5, -2, 5), (11, 0, 4)]), ((100, 20), [(0, 0, 3), (5, -1, 4), (9, 0, 3)]),
@@ -871,6 +896,7 @@ class Scene:
             t0, tc, t1 = 0.55, 0.62, 0.70
             if t < tc:
                 fly_pos = buzz(t)
+            prey = moth if self.night else fly  # frogs hunt moths after dark
             hx, hy = buzz(tc)
             look = 1 if (fly_pos or (hx, hy))[0] > fx + 4 else -1 if (fly_pos or (hx, hy))[0] < fx - 4 else 0
             mouth = (fx, fy - SIT_H + 10)
@@ -905,7 +931,7 @@ class Scene:
         if tongue:
             self._tongue(cv, *tongue, f)
         if fly_pos:
-            cv.blit(fly(f % 2), round(fly_pos[0]), round(fly_pos[1]), tone=self.tone)
+            cv.blit(prey(f % 2), round(fly_pos[0]), round(fly_pos[1]), tone=self.tone)
         if b == "sleep":
             self._zzz(cv, t, fx + 15, top + 4)
 
@@ -930,7 +956,7 @@ class Scene:
         body[(tx - 1, ty - 1)] = 0xFFA8C8
         cv.blit(outlined(body), 0, 0)
         if caught:
-            cv.blit(fly(f % 2), tx, ty - 1)
+            cv.blit((moth if self.night else fly)(f % 2), tx, ty - 1)
 
     def _splash(self, cv: Canvas, u: float, x: int) -> None:
         th, sy = self.theme, self.sy

@@ -5,6 +5,8 @@ from gittoad.art import FRAMES, H, SKINS, W, Scene
 from gittoad.encode import encode_gif, encode_png
 from gittoad.life import STAGES, read
 from gittoad.pond import SPECIES, assemble, season_for
+from gittoad.sky import light_window, moon_phase, sky_at
+from datetime import datetime, timezone
 
 
 def snapshot(counts):
@@ -88,6 +90,37 @@ class PondTest(unittest.TestCase):
                 toad.day = date(2026, month, 15)
                 frames = Scene(toad, skin="violet").frames()
                 self.assertLessEqual(len({c for f in frames for c in f}), 256)
+
+
+class SkyTest(unittest.TestCase):
+    BCN = (41.39, 2.17)
+
+    def test_barcelona_sunrise_and_sunset(self):
+        rise, sets = light_window(date(2026, 6, 21), *self.BCN, zenith=90.833)
+        self.assertEqual((rise.hour, sets.hour), (4, 19))  # 06:18 and 21:28 local summer time
+
+    def test_night_follows_the_clock(self):
+        at = lambda h: sky_at(datetime(2026, 11, 9, h, tzinfo=timezone.utc), *self.BCN).night
+        self.assertTrue(at(21))
+        self.assertTrue(at(4))
+        self.assertFalse(at(12))
+
+    def test_moon_phases(self):
+        p = moon_phase(date(2026, 11, 9))
+        self.assertLess(min(p, 1 - p), 0.05)  # new moon
+        self.assertAlmostEqual(moon_phase(date(2026, 11, 24)), 0.5, delta=0.05)  # full moon
+
+    def test_night_keeps_the_days_community_minus_odonates(self):
+        day = assemble(date(2026, 6, 3), "x", False, 40, 86, 128)
+        night = assemble(date(2026, 6, 3), "x", True, 40, 86, 128)
+        self.assertEqual([c.species.key for c in day if c.species.zone != "air"], [c.species.key for c in night])
+
+    def test_render_is_deterministic(self):
+        sky = sky_at(datetime(2026, 11, 9, 21, tzinfo=timezone.utc), *self.BCN)
+        toad = read(snapshot([3000]))
+        a = encode_gif(Scene(toad, sky=sky).frames(), W, H, 1, 10)
+        b = encode_gif(Scene(toad, sky=sky).frames(), W, H, 1, 10)
+        self.assertEqual(a, b)
 
 
 if __name__ == "__main__":

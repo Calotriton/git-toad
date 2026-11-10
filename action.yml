@@ -18,6 +18,12 @@ inputs:
   scale:
     description: Pixel scale of the 128x96 scene (4 gives 512x384).
     default: "4"
+  latitude:
+    description: Latitude of your pond. With longitude, night falls at the real time there (run the workflow hourly).
+    default: ""
+  longitude:
+    description: Longitude of your pond, east positive.
+    default: ""
   token:
     description: Token used to read public contribution data.
     default: ${{ github.token }}
@@ -34,7 +40,11 @@ runs:
         TOAD_SKIN: ${{ inputs.skin }}
         TOAD_OUTPUT_DIR: ${{ inputs.output-dir }}
         TOAD_SCALE: ${{ inputs.scale }}
+        TOAD_LAT: ${{ inputs.latitude }}
+        TOAD_LON: ${{ inputs.longitude }}
       run: |
+        place=()
+        if [ -n "$TOAD_LAT" ] && [ -n "$TOAD_LON" ]; then place=(--lat "$TOAD_LAT" --lon "$TOAD_LON"); fi
         python3 -m gittoad collect "$TOAD_LOGIN" --output "$RUNNER_TEMP/toad-snapshot.json"
         python3 -m gittoad render "$RUNNER_TEMP/toad-snapshot.json" \
-          --output-dir "$TOAD_OUTPUT_DIR" --skin "$TOAD_SKIN" --scale "$TOAD_SCALE"
+          --output-dir "$TOAD_OUTPUT_DIR" --skin "$TOAD_SKIN" --scale "$TOAD_SCALE" "${place[@]}"

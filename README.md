@@ -31,7 +31,7 @@ The HUD shows the level, an XP bar toward the next stage, and your total contrib
 
 | Behavior | When                                                                     | What you see                                                     |
 | -------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| `sleep`  | 14+ quiet days in a row                                                  | Night falls; the toad dozes and snores Z's.                      |
+| `sleep`  | 14+ quiet days in a row                                                  | The toad dozes and snores Z's under the night sky.               |
 | `leap`   | Crossed a milestone or a new stage in the last 7 days, or had a top-10% day | Jumps off its perch (tadpoles dart around) with sparkles.     |
 | `hunt`   | Contributed yesterday                                                    | Catches a fly with its tongue (tadpoles chase a food flake).     |
 | `idle`   | Otherwise                                                                | Blinks, looks around, and croaks.                                |
@@ -67,6 +67,19 @@ There are no fish, because fish-free ponds are the ones that keep amphibians. In
 
 Each render also writes `pond.json`, listing the species in that day's pond.
 
+## Day and night
+
+Give the Action your pond's `latitude` and `longitude` and run the workflow hourly. Night then falls at the real time there, from the end of dusk to first light (when the sun is 6 degrees below the horizon).
+
+At night:
+- The moon is drawn in its real phase.
+- Dragonflies and damselflies roost, so they're gone.
+- The frog hunts moths instead of flies, and croaks in the dark.
+
+The workflow only commits when the picture changes, which happens about three times a day.
+
+Without a location, the pond is always drawn by day. Either way, a sleeping toad is shown at night.
+
 ## Add it to your profile
 
 1. In your profile repository (`github.com/<you>/<you>`), copy [examples/profile-workflow.yml](examples/profile-workflow.yml) to `.github/workflows/toad.yml`. It uses `Calotriton/git-toad@main`.
@@ -74,7 +87,8 @@ Each render also writes `pond.json`, listing the species in that day's pond.
    ```markdown
    ![my toad](toad/toad.gif)
    ```
-3. Run the workflow once from the Actions tab. After that it updates every night.
+3. Set `latitude` and `longitude` to your pond's location.
+4. Run the workflow once from the Actions tab. After that it updates by itself.
 
 Action inputs:
 
@@ -84,6 +98,7 @@ Action inputs:
 | `skin`       | `meadow`                | `meadow`, `golden`, `azure`, `crimson`, `violet` |
 | `output-dir` | `toad`                  | Gets `toad.gif` (animated), `toad.png` (still) and `pond.json` (today's species). |
 | `scale`      | `4`                     | The scene is 128x96 pixels; 4 gives 512x384.   |
+| `latitude`, `longitude` | none         | Your pond's location, so night falls at the real time there. |
 | `token`      | `github.token`          | Only public data is read.                      |
 
 ## Run it locally
@@ -101,6 +116,7 @@ Preview any stage or behavior without waiting for it:
 ```sh
 python -m gittoad render snapshot.json --stage 3 --behavior leap
 python -m gittoad render snapshot.json --date 2026-04-20     # the pond on any day of the year
+python -m gittoad render snapshot.json --lat 41.39 --lon 2.17 --now 2026-11-24T22:00Z   # a full-moon night
 python -m gittoad demo --gifs      # every stage x behavior, plus demo/sheet.png
 python -m gittoad demo --seasons   # one frame per month
 ```
@@ -112,5 +128,6 @@ Run the tests with `python -m unittest discover -s tests`.
 - `gittoad/collect.py` reads your contribution calendar and repository languages from the GitHub GraphQL API.
 - `gittoad/life.py` turns that snapshot into a stage, spots and a behavior.
 - `gittoad/pond.py` holds the ecology: monthly phenology of the plants, banks and water, and the species list with abundances and sprites.
+- `gittoad/sky.py` works out first and last light (NOAA solar equations) and the moon phase.
 - `gittoad/art.py` paints the pond on a 128x96 canvas: banded, Bayer-dithered sky and water gradients, hand-made sprite templates for the frog (mirrored, auto-outlined), procedurally animated tadpole tails, and a 3x5 bitmap HUD font.
 - `gittoad/encode.py` writes the looping GIF with its own LZW encoder. It only re-encodes the parts of each frame that changed.

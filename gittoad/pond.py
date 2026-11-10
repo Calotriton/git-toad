@@ -278,15 +278,14 @@ def assemble(day: date, seed: str, night: bool, surface: int, bottom: int, width
     m = day.month - 1
     out: list[Critter] = []
     for zone, (lo, hi) in SLOTS.items():
-        if zone == "air" and night:
-            continue  # odonates roost at night
         pool = [s for s in SPECIES if s.zone == zone and s.months[m] > 0]
         for _ in range(min(len(pool), rng.randint(lo, hi))):
             sp = rng.choices(pool, weights=[s.months[m] for s in pool])[0]
             pool.remove(sp)
             count = max(1, round(rng.randint(*sp.group) * (0.5 + sp.months[m] / 6)))
             out.extend(_spawn(sp, count, rng, surface, bottom, width))
-    return out
+    # Drawn either way so the day's community stays the same when night falls.
+    return [c for c in out if not (night and c.species.zone == "air")]  # odonates roost at night
 
 
 def _spawn(sp: Species, count: int, rng: random.Random, surface: int, bottom: int, width: int) -> list[Critter]:
