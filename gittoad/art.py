@@ -10,7 +10,9 @@ from .life import STAGES, Toad
 from .pond import Season, assemble, census, place, season_for
 from .sky import Sky, moon_phase
 
-W, H = 128, 96
+W, H = 128, 96  # the pond scene
+STATUS_H = 13  # dialogue box under the scene
+TYPE_FRAMES = 20  # frames it takes to type the status out
 SURFACE = 40  # water line
 BOTTOM = 86  # pond floor
 FRAMES = 48
@@ -1007,7 +1009,37 @@ class Scene:
         self._reeds(cv, t)
         if self.hud:
             self._hud(cv)
+            return cv.px + self._status_box(f)
         return cv.px
+
+    @property
+    def height(self) -> int:
+        return H + STATUS_H if self.hud else H
+
+    def _status_box(self, f: int) -> list[int]:
+        """An RPG dialogue box under the pond; the reason types itself out, then a cursor blinks."""
+        box = [OUTLINE] * (W * STATUS_H)
+
+        def put(x: int, y: int, c: int) -> None:
+            if 0 <= x < W and 0 <= y < STATUS_H:
+                box[y * W + x] = c
+
+        for y in range(1, STATUS_H - 1):
+            for x in range(1, W - 1):
+                frame = y in (1, STATUS_H - 2) or x in (1, W - 2)
+                put(x, y, 0xE8E8F0 if frame else 0x24348C if y < 6 else 0x1C2870)
+        msg = self.toad.status
+        shown = min(len(msg), round(f * len(msg) / TYPE_FRAMES))
+        pts = text_pixels(msg[:shown])
+        for x, y in pts:
+            put(6 + x, 5 + y, OUTLINE)
+        for x, y in pts:
+            put(5 + x, 4 + y, WHITE)
+        if shown == len(msg) and (f // 4) % 2 == 0:
+            for i, w in enumerate((5, 3, 1)):
+                for dx in range(w):
+                    put(W - 9 + (5 - w) // 2 + dx, 6 + i, 0xF8D848)
+        return box
 
     def frames(self) -> list[list[int]]:
         return [self.frame(f) for f in range(FRAMES)]

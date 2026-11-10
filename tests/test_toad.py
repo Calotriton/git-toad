@@ -32,6 +32,22 @@ class LifeTest(unittest.TestCase):
     def test_crossing_a_milestone_leaps(self):
         self.assertEqual(read(snapshot([0] * 30 + [95, 0, 10])).behavior, "leap")
 
+    def test_status_explains_the_behavior(self):
+        self.assertEqual(read(snapshot([1] * 20 + [0] * 21)).status, "ZZZ... 21 QUIET DAYS")
+        self.assertEqual(read(snapshot([1] * 600 + [2])).status, "2 NEW CONTRIBUTIONS. YUM!")
+        self.assertEqual(read(snapshot([1] * 600 + [1, 0])).status, "NO CONTRIBUTIONS YESTERDAY")
+        self.assertEqual(read(snapshot([1] * 600 + [1, 0, 0, 0])).status, "3 QUIET DAYS IN A ROW")
+        self.assertEqual(read(snapshot([1] * 280 + [0] * 8 + [7])).status, "BIG DAY: 7 CONTRIBUTIONS!")
+        self.assertEqual(read(snapshot([1] * 296 + [5])).status, "NEW STAGE: POLLIWOG!")
+        self.assertEqual(read(snapshot([10] * 49 + [15])).status, "MILESTONE: 500 REACHED!")
+
+    def test_status_always_fits_the_box(self):
+        toad = read(snapshot([1] * 30 + [123456]))
+        for behavior in ("idle", "hunt", "leap", "sleep"):
+            for reason in ("stage", "milestone", "busy", ""):
+                toad.behavior, toad.reason, toad.milestone, toad.quiet_days = behavior, reason, 100000, 99999
+                self.assertLessEqual(len(toad.status), 27, toad.status)
+
     def test_streaks_earn_spots(self):
         self.assertEqual(read(snapshot([1] * 14 + [0])).spots, 2)
         self.assertEqual(read(snapshot([1] * 100)).spots, 3)
@@ -44,13 +60,15 @@ class RenderTest(unittest.TestCase):
                 toad = read(snapshot([STAGES[stage][0]]))
                 toad.behavior = behavior
                 for skin in SKINS:
-                    frame = Scene(toad, skin=skin).frame(FRAMES // 2)
-                    self.assertEqual(len(frame), W * H)
+                    scene = Scene(toad, skin=skin)
+                    self.assertEqual(len(scene.frame(FRAMES // 2)), W * scene.height)
 
     def test_encoders_produce_files(self):
-        frames = Scene(read(snapshot([3000]))).frames()
-        self.assertTrue(encode_gif(frames, W, H, 1, 10).startswith(b"GIF89a"))
-        self.assertTrue(encode_png(frames[0], W, H, 1).startswith(b"\x89PNG"))
+        scene = Scene(read(snapshot([3000])))
+        frames = scene.frames()
+        self.assertTrue(encode_gif(frames, W, scene.height, 1, 10).startswith(b"GIF89a"))
+        self.assertTrue(encode_png(frames[0], W, scene.height, 1).startswith(b"\x89PNG"))
+        self.assertEqual(len(Scene(read(snapshot([3000])), hud=False).frame(0)), W * H)
 
 
 class PondTest(unittest.TestCase):
@@ -118,8 +136,9 @@ class SkyTest(unittest.TestCase):
     def test_render_is_deterministic(self):
         sky = sky_at(datetime(2026, 11, 9, 21, tzinfo=timezone.utc), *self.BCN)
         toad = read(snapshot([3000]))
-        a = encode_gif(Scene(toad, sky=sky).frames(), W, H, 1, 10)
-        b = encode_gif(Scene(toad, sky=sky).frames(), W, H, 1, 10)
+        h = Scene(toad, sky=sky).height
+        a = encode_gif(Scene(toad, sky=sky).frames(), W, h, 1, 10)
+        b = encode_gif(Scene(toad, sky=sky).frames(), W, h, 1, 10)
         self.assertEqual(a, b)
 
 

@@ -29,12 +29,14 @@ The HUD shows the level, an XP bar toward the next stage, and your total contrib
 
 **Yesterday decides what it does.** The scene is rendered from the day that just ended (UTC):
 
-| Behavior | When                                                                     | What you see                                                     |
-| -------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| `sleep`  | 14+ quiet days in a row                                                  | The toad dozes and snores Z's under the night sky.               |
-| `leap`   | Crossed a milestone or a new stage in the last 7 days, or had a top-10% day | Jumps off its perch (tadpoles dart around) with sparkles.     |
-| `hunt`   | Contributed yesterday                                                    | Catches a fly with its tongue (tadpoles chase a food flake).     |
-| `idle`   | Otherwise                                                                | Blinks, looks around, and croaks.                                |
+| Behavior | When | What you see | Status box says |
+| -------- | ---- | ------------ | --------------- |
+| `sleep` | 14+ quiet days in a row | The toad dozes and snores Z's under the night sky. | `ZZZ... 21 QUIET DAYS` |
+| `leap` | Reached a new stage or a milestone in the last 7 days, or had a top-10% day | Jumps off its perch (tadpoles dart around) with sparkles. | `NEW STAGE: POLLIWOG!`, `MILESTONE: 500 REACHED!` or `BIG DAY: 7 CONTRIBUTIONS!` |
+| `hunt` | Contributed yesterday | Catches a fly with its tongue (tadpoles chase a food flake). | `3 NEW CONTRIBUTIONS. YUM!` |
+| `idle` | Otherwise | Blinks, looks around, and croaks. | `NO CONTRIBUTIONS YESTERDAY` or `4 QUIET DAYS IN A ROW` |
+
+**The status box** under the pond, an old-school RPG dialogue box, types out why the toad is doing what it does. `--no-hud` hides it together with the HUD.
 
 ![Every stage and behavior](docs/stages.png)
 
@@ -96,8 +98,8 @@ Action inputs:
 | ------------ | ----------------------- | ---------------------------------------------- |
 | `login`      | repository owner        | Whose public activity grows the toad.          |
 | `skin`       | `meadow`                | `meadow`, `golden`, `azure`, `crimson`, `violet` |
-| `output-dir` | `toad`                  | Gets `toad.gif` (animated), `toad.png` (still) and `pond.json` (today's species). |
-| `scale`      | `4`                     | The scene is 128x96 pixels; 4 gives 512x384.   |
+| `output-dir` | `toad`                  | Gets `toad.gif` (animated), `toad.png` (still) and `pond.json` (today's status and species). |
+| `scale`      | `4`                     | The image is 128x109 pixels (the pond plus the status box); 4 gives 512x436. |
 | `latitude`, `longitude` | none         | Your pond's location, so night falls at the real time there. |
 | `token`      | `github.token`          | Only public data is read.                      |
 
@@ -126,7 +128,7 @@ Run the tests with `python -m unittest discover -s tests`.
 ## How it is made
 
 - `gittoad/collect.py` reads your contribution calendar and repository languages from the GitHub GraphQL API.
-- `gittoad/life.py` turns that snapshot into a stage, spots and a behavior.
+- `gittoad/life.py` turns that snapshot into a stage, spots, a behavior and the status line that explains it.
 - `gittoad/pond.py` holds the ecology: monthly phenology of the plants, banks and water, and the species list with abundances and sprites.
 - `gittoad/sky.py` works out first and last light (NOAA solar equations) and the moon phase.
 - `gittoad/art.py` paints the pond on a 128x96 canvas: banded, Bayer-dithered sky and water gradients, hand-made sprite templates for the frog (mirrored, auto-outlined), procedurally animated tadpole tails, and a 3x5 bitmap HUD font.

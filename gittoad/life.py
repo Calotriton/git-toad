@@ -18,6 +18,7 @@ MILESTONES = [100, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000]
 BEHAVIORS = ["idle", "hunt", "leap", "sleep"]
 SLEEP_QUIET_DAYS = 14
 DEFAULT_SPOT = "#f8d848"
+STATUS_CHARS = 27  # what fits in the dialogue box
 
 
 @dataclass
@@ -31,10 +32,43 @@ class Toad:
     longest_streak: int = 0
     quiet_days: int = 0
     day: date = field(default_factory=date.today)  # the day the toad is drawn for
+    yesterday: int = 0
+    reason: str = ""  # why it leaps: "stage", "milestone" or "busy"
+    milestone: int = 0
 
     @property
     def stage_name(self) -> str:
         return STAGES[self.stage][1]
+
+    @property
+    def status(self) -> str:
+        """One line for the dialogue box saying why the toad does what it does."""
+        n, q, b = self.yesterday, self.quiet_days, self.behavior
+        if b == "sleep":
+            options = [f"ZZZ... {q} QUIET DAYS"] if q else ["ZZZ..."]
+        elif b == "leap":
+            options = {
+                "stage": [f"NEW STAGE: {self.stage_name}!"],
+                "milestone": [f"MILESTONE: {self.milestone} REACHED!", f"MILESTONE: {self.milestone}!"],
+                "busy": [f"BIG DAY: {n} CONTRIBUTIONS!", f"BIG DAY: {n} CONTRIBS!"],
+            }.get(self.reason, ["CELEBRATING!"])
+        elif b == "hunt" and n:
+            if self.stage == 0:  # frogspawn doesn't eat
+                options = [f"+{n} CONTRIBUTION{'' if n == 1 else 'S'} YESTERDAY", f"+{n} CONTRIBS YESTERDAY"]
+            else:
+                options = [f"{n} NEW CONTRIBUTION{'' if n == 1 else 'S'}. YUM!", f"{n} NEW CONTRIBS. YUM!"]
+        elif b == "hunt":
+            options = ["HUNTING!"]
+        elif q == 1:
+            options = ["NO CONTRIBUTIONS YESTERDAY"]
+        elif q > 1:
+            options = [f"{q} QUIET DAYS IN A ROW"]
+        else:
+            options = ["JUST CHILLING"]
+        for text in options:
+            if len(text) <= STATUS_CHARS:
+                return text
+        return options[-1][:STATUS_CHARS]
 
     @property
     def progress(self) -> float:
@@ -70,14 +104,15 @@ def read(snapshot: dict) -> Toad:
 
     yesterday = counts[-1] if counts else 0
     week_ago = total - sum(counts[-7:])
-    thresholds = MILESTONES + [t for t, _ in STAGES[1:]]
-    crossed = any(week_ago < m <= total for m in thresholds)
+    new_stage = stage_for(week_ago) < stage
+    crossed = [m for m in MILESTONES if week_ago < m <= total]
     active = sorted(c for c in counts[-365:] if c)
     busy = yesterday >= 3 and len(active) >= 10 and yesterday >= active[int(len(active) * 0.9)]
+    reason = "stage" if new_stage else "milestone" if crossed else "busy" if busy else ""
 
     if counts and quiet >= SLEEP_QUIET_DAYS:
         behavior = "sleep"
-    elif crossed or busy:
+    elif reason:
         behavior = "leap"
     elif yesterday:
         behavior = "hunt"
@@ -100,4 +135,7 @@ def read(snapshot: dict) -> Toad:
         spot_colors=colors,
         longest_streak=longest,
         quiet_days=quiet,
+        yesterday=yesterday,
+        reason=reason,
+        milestone=max(crossed, default=0),
     )
