@@ -972,11 +972,11 @@ class Scene:
 
     def _sparkles(self, cv: Canvas, f: int, cx: int, cy: int, spread: int) -> None:
         r = random.Random(3)
-        for i in range(5):
+        for i in range(3):
             ox, oy = r.randint(-spread, spread), r.randint(-spread, spread // 2)
-            size = (f // 2 + i * 3) % 6
-            if size < 3:
-                cv.blit(sparkle(size), cx + ox, cy + oy)
+            step = (f // 3 + i * 5) % 12  # slow twinkle, lit a third of the time
+            if step < 4:
+                cv.blit(sparkle(1 if step in (1, 2) else 0), cx + ox, cy + oy)
 
     def _zzz(self, cv: Canvas, t: float, x: int, y: int) -> None:
         for i in range(3):
